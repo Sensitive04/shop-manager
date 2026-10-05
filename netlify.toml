@@ -21,10 +21,16 @@
   NODE_VERSION = "24"
   NEXT_TELEMETRY_DISABLED = "1"
   # `next build` type-checks and prerenders. The API routes are all dynamic and
-  # only touch MongoDB at request time, so no credentials are needed to build —
-  # MONGODB_URI must not be set here, and lib/db.ts refuses the in-memory
-  # fallback in production. MONGODB_DB_NAME is harmless because it is not secret.
+  # only touch MongoDB at request time, so no credentials are needed to build.
   MONGODB_DB_NAME = "shopmanager"
+
+  # NODE_ENV must NOT appear here, and must not be set in the Netlify UI either.
+  # A declared NODE_ENV applies to the install step, where npm skips every
+  # devDependency — which fails the build on `@tailwindcss/postcss` (the CSS
+  # pipeline) and `mongodb-memory-server`. Next.js sets NODE_ENV=production
+  # during `next build` regardless, and Netlify Functions already default to it,
+  # so declaring it achieves nothing except the breakage. The production guard
+  # against a throwaway database is MONGODB_MEMORY_FALLBACK=false instead.
 
 [functions]
   node_bundler = "esbuild"
@@ -45,13 +51,20 @@
 #   Site configuration > Functions > Function timeout > 30 seconds
 #
 # Runtime-only env vars must also be set in that UI, not in [build.environment]
-# above, which applies to the build step only:
+# above, which applies to the build step only. Scope each to Builds + Functions:
 #
-#   MONGODB_URI           fresh Atlas SRV URI with the rotated password
-#   MONGODB_DB_NAME       shopmanager
-#   NODE_ENV              production
-#   TZ                    shop timezone, e.g. Asia/Karachi
+#   MONGODB_URI               Atlas SRV URI, alphanumeric password, ends in
+#                             retryWrites=true&w=majority
+#   MONGODB_DB_NAME           shopmanager
+#   MONGODB_MEMORY_FALLBACK   false
+#   TZ                        shop timezone, e.g. Asia/Karachi
+#
+# Do not set NODE_ENV here — see the note in [build.environment] above.
 #
 # TZ matters: lib/dates.ts parses YYYY-MM-DD in local time to keep ledger day
 # boundaries aligned with the till, and Netlify Functions default to UTC. Without
 # TZ the shop's "today" is wrong for part of every day.
+#
+# MONGODB_MEMORY_FALLBACK=false matters for a different reason: without it, a
+# deployed function whose MONGODB_URI is missing or wrong attaches to an
+# in-memory database and accepts sales that vanish when the instance thaws.

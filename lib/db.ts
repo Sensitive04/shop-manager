@@ -44,9 +44,50 @@ const cache: MongooseCache = (globalForMongoose.__shopManagerMongoose ??= {
 /** Cached result of the transaction-capability probe. Null = not yet checked. */
 let transactionSupport: boolean | null = null;
 
+/**
+ * Database name used when MONGODB_URI names none.
+ *
+ * An Atlas SRV string usually ends in a bare `/`, which leaves the database
+ * unset; without this the driver quietly writes every sale to a database called
+ * `test`. Pinning it here keeps the name explicit wherever the URI came from.
+ */
+const DEFAULT_DB_NAME = 'shopmanager';
+
 function isEnabled(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined || value === '') return fallback;
   return !['false', '0', 'no'].includes(value.toLowerCase());
+}
+
+/**
+ * Resolve MONGODB_URI, or explain precisely why it cannot be resolved.
+ *
+ * Exported for tests. Nothing here connects, so it is safe to call without a
+ * database. Kept separate from {@link connectToDatabase} because the failure that
+ * matters most in production is a misconfigured URI, and that should be assertable
+ * without standing up a replica set.
+ */
+export function resolveConnectionSettings(
+  env: Record<string, string | undefined> = process.env,
+): {
+  uri: string | null;
+  memoryFallbackAllowed: boolean;
+  dbName: string;
+  error: string | null;
+} {
+  const uri = env.MONGODB_URI?.trim() || null;
+  const memoryFallbackAllowed = isEnabled(env.MONGODB_MEMORY_FALLBACK, true);
+  const dbName = env.MONGODB_DB_NAME?.trim() || DEFAULT_DB_NAME;
+
+  if (uri) return { uri, memoryFallbackAllowed, dbName, error: null };
+
+  const error = memoryFallbackAllowed
+    ? null
+    : 'MONGODB_URI is not set and the in-memory fallback is disabled ' +
+      '(MONGODB_MEMORY_FALLBACK=false). Set MONGODB_URI to a replica set ' +
+      'connection string, e.g. mongodb+srv://user:password@cluster.example.net/ ' +
+      '— a replica set is required because POS checkout uses transactions.';
+
+  return { uri, memoryFallbackAllowed, dbName, error };
 }
 
 /**
@@ -101,36 +142,48 @@ function poolOptions(): {
 }
 
 /**
- * Start an in-process single-node replica set. Development only — this is a
- * dynamic import so the package (and its mongod binary download) is never
- * pulled into a production build.
+ * Start an in-process single-node replica set. Development only.
+ *
+ * The specifier is deliberately indirect. A literal `import('mongodb-memory-server')`
+ * is statically analysed by Turbopack and must resolve at build time, so a
+ * production build without devDependencies installed fails on an import that
+ * would never execute. Building the specifier at runtime keeps the package out
+ * of the module graph entirely — the development fallback keeps working, and the
+ * production bundle never has to know the package exists.
  */
 async function startMemoryReplicaSet(): Promise<string> {
-  const { MongoMemoryReplSet } = await import('mongodb-memory-server');
-  const replSet = await MongoMemoryReplSet.create({
-    replSet: { count: 1, storageEngine: 'wiredTiger' },
-  });
-  cache.memoryServer = replSet;
-  return replSet.getUri();
+  const specifier = ['mongodb', 'memory', 'server'].join('-');
+
+  try {
+    const mod = (await import(/* turbopackIgnore: true */ /* webpackIgnore: true */ specifier)) as {
+      MongoMemoryReplSet: {
+        create: (options: unknown) => Promise<{ getUri: () => string; stop: () => Promise<boolean> }>;
+      };
+    };
+
+    const replSet = await mod.MongoMemoryReplSet.create({
+      replSet: { count: 1, storageEngine: 'wiredTiger' },
+    });
+    cache.memoryServer = replSet;
+    return replSet.getUri();
+  } catch (error) {
+    throw new Error(
+      'MONGODB_URI is not set and the in-memory development fallback could not be ' +
+        `started: ${error instanceof Error ? error.message : String(error)}. ` +
+        'Set MONGODB_URI, or run `npm install` so devDependencies are present.',
+    );
+  }
 }
 
 async function resolveUri(): Promise<string> {
-  const configured = process.env.MONGODB_URI?.trim();
-  if (configured) return configured;
+  const settings = resolveConnectionSettings();
 
-  if (!isEnabled(process.env.MONGODB_MEMORY_FALLBACK, true)) {
-    throw new Error(
-      'MONGODB_URI is not set and the in-memory fallback is disabled. ' +
-        'Set MONGODB_URI in .env.local or enable MONGODB_MEMORY_FALLBACK.',
-    );
-  }
+  if (settings.uri) return settings.uri;
 
-  if (process.env.NODE_ENV === 'production') {
-    // A throwaway database in production would silently lose every sale.
-    throw new Error(
-      'MONGODB_URI must be set in production. The in-memory MongoDB fallback ' +
-        'is development-only because its data is discarded when the process exits.',
-    );
+  if (settings.error) {
+    // A throwaway database in production would silently lose every sale, so a
+    // missing MONGODB_URI has to be a loud failure rather than a quiet default.
+    throw new Error(settings.error);
   }
 
   const uri = await startMemoryReplicaSet();
@@ -149,9 +202,8 @@ export async function connectToDatabase(): Promise<typeof mongoose> {
     const conn = await mongoose.connect(uri, {
       ...poolOptions(),
       // A bare `mongodb+srv://…/` connection string names no database, and
-      // without this the driver silently writes everything to `test`. Pinning it
-      // here means the database name is explicit wherever the URI came from.
-      dbName: process.env.MONGODB_DB_NAME?.trim() || 'shopmanager',
+      // without this the driver silently writes everything to `test`.
+      dbName: resolveConnectionSettings().dbName,
     });
 
     cache.conn = conn;
