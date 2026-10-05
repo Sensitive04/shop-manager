@@ -1,0 +1,32 @@
+# Netlify deployment.
+#
+# Netlify builds and serves the Next.js app itself; there is no container and no
+# long-lived Node process. Two consequences are handled explicitly:
+#
+#   1. Netlify Functions have a read-only filesystem. Nothing can be written to
+#      disk and read back later, so the database must be external — see
+#      MONGODB_URI. This is why data lives in MongoDB Atlas rather than in a local
+#      file. `output: 'standalone'` in next.config.ts serves the Docker path and
+#      is simply unused here.
+#
+#   2. Functions scale out horizontally and freeze when idle, so lib/db.ts
+#      shrinks the connection pool when it detects this runtime. Without that,
+#      concurrent instances would exhaust the database's connection limit.
+
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "24"
+  NEXT_TELEMETRY_DISABLED = "1"
+  # `next build` type-checks and prerenders. The API routes are all dynamic and
+  # only touch MongoDB at request time, so no credentials are needed to build —
+  # MONGODB_URI must not be set here, and lib/db.ts refuses the in-memory
+  # fallback in production. MONGODB_DB_NAME is harmless because it is not secret.
+  MONGODB_DB_NAME = "shopmanager"
+
+[functions]
+  # A sale writes to several collections in one transaction. The default 10s is
+  # tight when the first request lands on a cold Atlas free cluster.
+  timeout = 30

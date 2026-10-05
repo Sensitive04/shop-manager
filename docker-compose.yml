@@ -1,0 +1,135 @@
+# Local stack: the app plus a single-node MongoDB replica set.
+#
+# A replica set (rather than a bare mongod) is required: POS checkout writes to
+# four collections that must commit together, and multi-document transactions do
+# not exist on a standalone server. `rs0` below is that single-node set — no real
+# redundancy, but full transactional support for local development.
+#
+#   docker compose up --build       start everything
+#   docker compose run --rm seed    populate demo data
+#   docker compose down -v          stop and wipe the database volume
+
+name: shop-manager
+
+services:
+  mongo:
+    image: mongo:8
+    restart: unless-stopped
+    command: ['mongod', '--replSet', 'rs0', '--bind_ip_all']
+    ports:
+      - '27017:27017'
+    environment:
+      # Enables authentication. The root user is created on first boot, which is
+      # also what lets `mongo-init` below authenticate to run rs.initiate().
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:-admin}
+      MONGO_INITDB_DATABASE: ${MONGO_INITDB_DATABASE:-shopmanager}
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      # Deliberately only a ping: `rs.status()` cannot succeed until `mongo-init`
+      # has run, so checking for the primary here would deadlock the stack — the
+      # app waits on `mongo-init`, which waits on this healthcheck.
+      test: >
+        mongosh --quiet --eval 'db.getSiblingDB("admin").runCommand({ ping: 1 })'
+        --username "$$MONGO_INITDB_ROOT_USERNAME" --password "$$MONGO_INITDB_ROOT_PASSWORD"
+        --authenticationDatabase admin
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # One-shot: turns the `--replSet rs0` mongod into an actual replica set by
+  # running rs.initiate(), then waits for it to elect a primary. Idempotent, so it
+  # is safe on every `up` — it exits quietly when the set already exists.
+  mongo-init:
+    image: mongo:8
+    restart: 'no'
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:-admin}
+    entrypoint:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        echo "waiting for mongod to accept connections…"
+        until mongosh --quiet --host mongo --port 27017 \
+              --username "$$MONGO_INITDB_ROOT_USERNAME" --password "$$MONGO_INITDB_ROOT_PASSWORD" \
+              --authenticationDatabase admin \
+              --eval 'db.getSiblingDB("admin").runCommand({ ping: 1 })' >/dev/null 2>&1; do
+          sleep 2
+        done
+
+        # `mongo` is the member host, so the address the driver is handed after the
+        # handshake resolves on the compose network.
+        mongosh --quiet --host mongo --port 27017 \
+          --username "$$MONGO_INITDB_ROOT_USERNAME" --password "$$MONGO_INITDB_ROOT_PASSWORD" \
+          --authenticationDatabase admin \
+          --eval '
+            try {
+              const status = rs.status();
+              print("replica set " + status.set + " already initiated (state " + status.myState + ")");
+            } catch (error) {
+              if (error.codeName !== "NotYetInitialized" && error.code !== 94) { throw error; }
+              rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "mongo:27017" }] });
+              print("initiated replica set rs0");
+            }
+          '
+
+        echo "waiting for a primary…"
+        for attempt in $$(seq 1 30); do
+          if mongosh --quiet --host mongo --port 27017 \
+                --username "$$MONGO_INITDB_ROOT_USERNAME" --password "$$MONGO_INITDB_ROOT_PASSWORD" \
+                --authenticationDatabase admin \
+                --eval 'quit(rs.status().myState === 1 ? 0 : 1)' >/dev/null 2>&1; then
+            echo "replica set rs0 is primary and ready"
+            exit 0
+          fi
+          sleep 2
+        done
+
+        echo "replica set did not reach a primary in time" >&2
+        exit 1
+
+  # Runs to completion once, then exits. It is *not* started by `up`, because the
+  # demo data would be wiped on every restart; bring it up explicitly instead.
+  #
+  # Note it carries the app's full dependency tree: the standalone build output
+  # has no tsx and the seed script imports the services directly.
+  seed:
+    profiles: ['tools']
+    build:
+      context: .
+      target: seed
+    environment:
+      MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME:-admin}:${MONGO_INITDB_ROOT_PASSWORD:-admin}@mongo:27017/${MONGO_INITDB_DATABASE:-shopmanager}?replicaSet=rs0&authSource=admin
+      NODE_ENV: development
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+
+  app:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: production
+      MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME:-admin}:${MONGO_INITDB_ROOT_PASSWORD:-admin}@mongo:27017/${MONGO_INITDB_DATABASE:-shopmanager}?replicaSet=rs0&authSource=admin
+      # Refuse the in-memory fallback in production: lib/db.ts already throws
+      # here, and being explicit documents the intent.
+      MONGODB_MEMORY_FALLBACK: 'false'
+      EXPIRY_ALERT_DAYS: ${EXPIRY_ALERT_DAYS:-30}
+      CURRENCY_SYMBOL: ${CURRENCY_SYMBOL:-$}
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+
+volumes:
+  mongo-data:

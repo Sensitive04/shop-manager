@@ -1,0 +1,78 @@
+@import 'tailwindcss';
+
+/*
+ * Explicit @source directives.
+ *
+ * Tailwind v4 auto-detects source files, but there is a known Turbopack +
+ * Tailwind v4 file-watching regression: newly added classes are missed until
+ * the dev server is restarted. Naming the scan roots explicitly sidesteps it.
+ */
+@source '../app/**/*.{ts,tsx}';
+@source '../components/**/*.{ts,tsx}';
+@source '../lib/**/*.{ts,tsx}';
+
+@theme {
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  /* Neutral base */
+  --color-ink-50: oklch(0.985 0.002 250);
+  --color-ink-100: oklch(0.967 0.003 250);
+  --color-ink-200: oklch(0.925 0.006 250);
+  --color-ink-300: oklch(0.869 0.008 250);
+  --color-ink-400: oklch(0.704 0.014 250);
+  --color-ink-500: oklch(0.554 0.016 250);
+  --color-ink-600: oklch(0.446 0.017 250);
+  --color-ink-700: oklch(0.372 0.016 250);
+  --color-ink-800: oklch(0.279 0.014 250);
+  --color-ink-900: oklch(0.208 0.012 250);
+  --color-ink-950: oklch(0.145 0.010 250);
+
+  /* Rose accent — suits a skincare brand without being loud */
+  --color-blush-50: oklch(0.977 0.012 350);
+  --color-blush-100: oklch(0.948 0.025 350);
+  --color-blush-200: oklch(0.902 0.048 350);
+  --color-blush-300: oklch(0.828 0.082 350);
+  --color-blush-400: oklch(0.727 0.118 350);
+  --color-blush-500: oklch(0.647 0.137 350);
+  --color-blush-600: oklch(0.577 0.130 350);
+  --color-blush-700: oklch(0.505 0.112 350);
+  --color-blush-800: oklch(0.435 0.093 350);
+  --color-blush-900: oklch(0.383 0.078 350);
+
+  /* Semantic status */
+  --color-positive: oklch(0.596 0.118 163);
+  --color-warning: oklch(0.712 0.148 68);
+  --color-critical: oklch(0.577 0.191 25);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-ink-200);
+  }
+
+  body {
+    background-color: var(--color-ink-50);
+    color: var(--color-ink-900);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Keyboard focus stays visible everywhere; only suppressed for mouse users. */
+  :focus-visible {
+    outline: 2px solid var(--color-blush-500);
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  /* Respect users who have asked for less motion. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
