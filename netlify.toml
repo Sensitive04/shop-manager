@@ -27,6 +27,31 @@
   MONGODB_DB_NAME = "shopmanager"
 
 [functions]
-  # A sale writes to several collections in one transaction. The default 10s is
-  # tight when the first request lands on a cold Atlas free cluster.
-  timeout = 30
+  node_bundler = "esbuild"
+
+  # next.config.ts lists mongoose in serverExternalPackages, so Next.js leaves it
+  # as a bare runtime require instead of inlining it. esbuild cannot resolve the
+  # MongoDB driver's conditionally-required native add-ons (bson-ext, kerberos),
+  # so the package has to be copied into the bundle verbatim rather than bundled.
+  # Without this the function builds but fails on the first database call.
+  external_node_modules = ["mongoose"]
+
+# Not settable here: function timeout. `[functions]` only accepts directory,
+# node_bundler, external_node_modules and included_files — a `timeout` key is a
+# hard config-parse error, not a warning. A sale writes several collections in one
+# transaction, which is tight against the 10s default on a cold Atlas free
+# cluster, so raise it in the Netlify UI instead:
+#
+#   Site configuration > Functions > Function timeout > 30 seconds
+#
+# Runtime-only env vars must also be set in that UI, not in [build.environment]
+# above, which applies to the build step only:
+#
+#   MONGODB_URI           fresh Atlas SRV URI with the rotated password
+#   MONGODB_DB_NAME       shopmanager
+#   NODE_ENV              production
+#   TZ                    shop timezone, e.g. Asia/Karachi
+#
+# TZ matters: lib/dates.ts parses YYYY-MM-DD in local time to keep ledger day
+# boundaries aligned with the till, and Netlify Functions default to UTC. Without
+# TZ the shop's "today" is wrong for part of every day.
