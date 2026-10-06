@@ -12,8 +12,8 @@ import { Button, Card, ErrorBanner, Input } from '@/components/ui';
  *
  * The only page reachable without a session. A failed attempt shows the same
  * message whether the username or the password was wrong, matching what
- * `/api/auth/login` returns, so the form cannot be used to discover which
- * accounts exist.
+ * `/api/auth` returns, so the form cannot be used to discover which accounts
+ * exist.
  *
  * Wrapped in `<Suspense>` because `useSearchParams` opts the whole subtree into
  * client-side rendering, and this route is statically prerendered at build time.
@@ -31,7 +31,7 @@ function LoginForm() {
   const [password, setPassword] = useState('');
 
   const { submit, pending, error, fieldErrors } = useSubmit(async () => {
-    await api.post<{ ok: true }>('/api/auth/login', { username, password });
+    await api.post<{ ok: true }>('/api/auth', { username, password });
     // The cookie is already set by the response; a refresh makes the server layout
     // re-run its own session check rather than trusting client state.
     //

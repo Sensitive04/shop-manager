@@ -3,7 +3,7 @@ import { login, logout, SESSION_COOKIE, sessionCookieOptions } from '@/lib/auth'
 import { loginSchema } from '@/lib/validators';
 
 /**
- * POST /api/auth/login — exchange credentials for a session cookie.
+ * POST /api/auth — exchange credentials for a session cookie.
  *
  * This is the only unauthenticated write in the app. It returns 401 on bad
  * credentials via `UnauthorizedError`, which `handleRoute` renders through the
@@ -21,7 +21,7 @@ export const POST = handleRoute(async (request: Request) => {
 });
 
 /**
- * DELETE /api/auth/login — sign out.
+ * DELETE /api/auth — sign out.
  *
  * Revokes the session server-side *and* clears the cookie. Clearing only the
  * cookie would leave a stolen copy valid for the full 30 days; revoking only the
