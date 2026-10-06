@@ -332,13 +332,16 @@ signed self-contained token cannot be withdrawn.
 nothing native has to build on Netlify. The cost parameters are embedded in the
 hash, so the work factor can be raised later without a migration.
 
-Enforcement is in two independent layers:
+Enforcement is in three independent layers:
 
+- `middleware.ts` returns a 307 to `/login` for any page request that carries no
+  session cookie, so a signed-out visitor never even downloads the page shell.
 - `protectedRoute` in `lib/api.ts` rejects an unauthenticated request with 401
   before the handler body runs. Fifteen routes use it; `/api/health` and the
   three `/api/auth` routes deliberately do not.
-- The `(app)` layout calls `requireSession` and redirects to `/login`, so a
-  signed-out visitor never sees a page shell.
+- The `(app)` layout calls `requireSession` and redirects to `/login`; it is the
+  layer that actually validates the cookie, so a forged or expired one is still
+  turned away even though the middleware let it through.
 
 Neither layer trusts the other, and the client-side 401 handler in
 `api-client.ts` is only a convenience.
@@ -400,6 +403,7 @@ TZ=UTC npm test
 ## Project layout
 
 ```
+middleware.ts          Edge middleware returning a 307 to /login for cookie-less page requests
 app/
   (app)/              session-guarded pages (dashboard, inventory, pos, ledger, customers)
   login/              the only page reachable without a session
@@ -411,6 +415,7 @@ components/           UI primitives, app shell, API client hooks
 lib/
   api.ts              envelope helpers, handleRoute and protectedRoute
   auth.ts             sessions: login, logout, requireSession, cookie policy
+  session.ts          the session cookie name, shared by auth and middleware
   password.ts         scrypt hashing (no next/headers dependency, so scripts can use it)
   db.ts               mongoose connection, transaction helper, memory fallback
   errors.ts           typed errors -> HTTP status codes
