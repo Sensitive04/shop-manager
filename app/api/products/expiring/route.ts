@@ -1,4 +1,4 @@
-import { handleRoute, ok } from '@/lib/api';
+import { protectedRoute, ok } from '@/lib/api';
 import {
   DEFAULT_EXPIRY_WINDOW_DAYS,
   expiringProducts,
@@ -10,7 +10,7 @@ import {
  * Products holding at least one batch that expires inside the window, soonest
  * expiry first. Expired lots are always included regardless of the window.
  */
-export const GET = handleRoute(async (request: Request) => {
+export const GET = protectedRoute(async (request: Request) => {
   const url = new URL(request.url);
   const raw = url.searchParams.get('days');
   const parsed = raw === null ? NaN : Number(raw);

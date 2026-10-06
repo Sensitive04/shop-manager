@@ -49,6 +49,11 @@ async function request<T>(
   try {
     response = await fetch(path, {
       ...init,
+      // Explicit: the session cookie is the app's only credential, so every
+      // request must carry it. `same-origin` is the default for a same-origin
+      // fetch, but relying on that implicitly is how a future absolute-URL call
+      // silently starts dropping auth.
+      credentials: 'same-origin',
       headers: {
         ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
         ...init?.headers,
@@ -76,6 +81,14 @@ async function request<T>(
   }
 
   if (!payload.ok) {
+    // An expired or revoked session turns every page into a stream of 401s. Bounce
+    // to the login screen once, rather than letting each card render its own
+    // "sign in to continue" message. `replace` keeps the dead page out of history
+    // so Back cannot loop the visitor into another 401.
+    if (response.status === 401 && !path.startsWith('/api/auth')) {
+      redirectToLogin();
+    }
+
     throw new ApiRequestError(
       payload.error.message,
       response.status,
@@ -85,6 +98,29 @@ async function request<T>(
   }
 
   return payload.data;
+}
+
+/**
+ * Send the visitor to the login page, preserving where they were.
+ *
+ * A full navigation rather than a router push, and deliberately: the session
+ * cookie has to be re-read by the server before the new route renders, and a
+ * client-side navigation would render the page shell first and then bounce. The
+ * `next` value is built from `pathname` + `search` only, both of which are
+ * same-site by construction, and the login page re-validates it server-side.
+ */
+function redirectToLogin() {
+  if (typeof window === 'undefined') return;
+  if (window.location.pathname === '/login') return;
+
+  const next = `${window.location.pathname}${window.location.search}`;
+  // The lint rule prefers a router push, which is not reachable here: this is a
+  // plain module called from a fetch callback, not a component render or event
+  // handler, so there is no router instance to use. A client-side push would also
+  // be wrong — the `(app)` layout's session check only runs on a server render,
+  // so the redirect has to be a real navigation.
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+  window.location.href = `/login?next=${encodeURIComponent(next)}`;
 }
 
 export const api = {

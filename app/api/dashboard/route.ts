@@ -1,4 +1,4 @@
-import { handleRoute, ok } from '@/lib/api';
+import { protectedRoute, ok } from '@/lib/api';
 import { connectToDatabase } from '@/lib/db';
 import { addDays, startOfDay } from '@/lib/dates';
 import { roundMoney } from '@/lib/money';
@@ -16,7 +16,7 @@ import type { DashboardDto, LeanSale } from '@/types/dto';
  * position, best sellers, recent sales, and the two alert lists. Batched so the
  * page costs a single round trip instead of eight.
  */
-export const GET = handleRoute(async () => {
+export const GET = protectedRoute(async () => {
   await connectToDatabase();
 
   const now = new Date();

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 
 import { api, useAsync, useSubmit } from '@/components/api-client';
@@ -22,7 +22,9 @@ import { toDateInputValue } from '@/lib/dates';
 import { PRODUCT_CATEGORIES } from '@/types/constants';
 import type { ProductDto, StockMovementDto } from '@/types/dto';
 
-type TabId = 'all' | 'low-stock' | 'expiring' | 'movements';
+type TabId = 'all' | 'low-stock' | 'expiring' | 'inactive' | 'movements';
+
+const TABS: TabId[] = ['all', 'low-stock', 'expiring', 'inactive', 'movements'];
 
 interface ProductListResponse {
   items: ProductDto[];
@@ -43,9 +45,7 @@ export default function InventoryPage() {
   const searchParams = useSearchParams();
   const initialTab = (searchParams.get('tab') as TabId | null) ?? 'all';
   const [tab, setTab] = useState<TabId>(
-    ['all', 'low-stock', 'expiring', 'movements'].includes(initialTab)
-      ? initialTab
-      : 'all',
+    TABS.includes(initialTab as TabId) ? (initialTab as TabId) : 'all',
   );
 
   const [search, setSearch] = useState('');
@@ -61,11 +61,23 @@ export default function InventoryPage() {
 
     if (tab === 'low-stock') params.set('lowStock', 'true');
     if (tab === 'expiring') params.set('expiringWithinDays', '30');
+    // The catalogue query hides inactive products by default, so this tab has to
+    // ask for them explicitly — and *only* them, or it would just duplicate the
+    // "All products" tab.
+    if (tab === 'inactive') params.set('includeInactive', 'true');
 
     return api.get<ProductListResponse>(`/api/products?${params.toString()}`);
   }, [search, category, tab]);
 
   const products = useAsync<ProductListResponse>(loadProducts, [tab, search, category]);
+
+  // `includeInactive` widens the query to *both* states; the Inactive tab wants
+  // only the deactivated ones. Filtering here rather than adding a second query
+  // mode to the endpoint keeps one code path in the service and one on the wire.
+  const visibleProducts = useMemo(() => {
+    const items = products.data?.items ?? [];
+    return tab === 'inactive' ? items.filter((product) => !product.active) : items;
+  }, [products.data, tab]);
 
   // Derived, not stored: the movement log is only worth fetching while its tab is
   // open, but keeping that in state would mean an effect writing to state on every
@@ -109,6 +121,7 @@ export default function InventoryPage() {
           { id: 'all', label: 'All products' },
           { id: 'low-stock', label: 'Low stock', count: lowStockCount.data?.length },
           { id: 'expiring', label: 'Expiring soon', count: expiringCount.data?.items.length },
+          { id: 'inactive', label: 'Inactive' },
           { id: 'movements', label: 'Stock movements' },
         ]}
       />
@@ -147,7 +160,8 @@ export default function InventoryPage() {
         <ErrorState message={products.error} onRetry={products.reload} />
       ) : (
         <ProductTable
-          products={products.data?.items ?? []}
+          products={visibleProducts}
+          inactiveTab={tab === 'inactive'}
           onEdit={setEditing}
           onChanged={() => {
             void products.reload();
@@ -191,21 +205,42 @@ export default function InventoryPage() {
 
 function ProductTable({
   products,
+  inactiveTab,
   onEdit,
   onChanged,
 }: {
   products: ProductDto[];
+  /** The Inactive tab offers restore and purge instead of stock and edit. */
+  inactiveTab: boolean;
   onEdit: (product: ProductDto) => void;
   onChanged: () => void;
 }) {
   const [selected, setSelected] = useState<ProductDto | null>(null);
+  const [deactivating, setDeactivating] = useState<ProductDto | null>(null);
+  const [restoring, setRestoring] = useState<ProductDto | null>(null);
+  const { submit: deactivate, pending: deactivatingPending, error: deactivateError } =
+    useSubmit(async () => {
+      await api.delete(`/api/products/${deactivating?.id}`);
+      setDeactivating(null);
+      onChanged();
+    });
+
+  const { submit: restore, pending: restoringPending, error: restoreError } = useSubmit(async () => {
+    await api.delete(`/api/products/${restoring?.id}?restore=true`);
+    setRestoring(null);
+    onChanged();
+  });
 
   if (products.length === 0) {
     return (
       <Card padded={false}>
         <EmptyState
-          title="No products found"
-          description="Try a different search, or add your first product to get started."
+          title={inactiveTab ? 'No inactive products' : 'No products found'}
+          description={
+            inactiveTab
+              ? 'Products you deactivate will appear here, ready to restore or delete for good.'
+              : 'Try a different search, or add your first product to get started.'
+          }
         />
       </Card>
     );
@@ -232,7 +267,12 @@ function ProductTable({
               {products.map((product) => (
                 <tr key={product.id} className="hover:bg-ink-50">
                   <td className="px-5 py-3">
-                    <p className="font-medium text-ink-900">{product.name}</p>
+                    <p className="font-medium text-ink-900">
+                      {product.name}
+                      {!inactiveTab && !product.active && (
+                        <span className="ml-2 text-xs font-normal text-ink-500">(inactive)</span>
+                      )}
+                    </p>
                     <p className="text-xs text-ink-500">
                       {product.sku}
                       {product.brand ? ` · ${product.brand}` : ''}
@@ -252,16 +292,38 @@ function ProductTable({
                   </td>
                   <td className="px-5 py-3 text-right">
                     <div className="flex justify-end gap-1">
-                      <Button size="sm" variant="secondary" onClick={() => onEdit(product)}>
-                        Edit
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setSelected(product)}
-                      >
-                        Stock
-                      </Button>
+                      {inactiveTab ? (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => setRestoring(product)}
+                          >
+                            Restore
+                          </Button>
+                          <PurgeButton product={product} onPurged={onChanged} />
+                        </>
+                      ) : (
+                        <>
+                          <Button size="sm" variant="secondary" onClick={() => onEdit(product)}>
+                            Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setSelected(product)}
+                          >
+                            Stock
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setDeactivating(product)}
+                          >
+                            Deactivate
+                          </Button>
+                        </>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -281,7 +343,145 @@ function ProductTable({
           }}
         />
       )}
+
+      {/* Deactivate: reversible, so a plain confirm dialog is proportionate. */}
+      {deactivating && (
+        <ConfirmDialog
+          title="Deactivate product"
+          description={`${deactivating.name} (${deactivating.sku}) will be hidden from the catalogue, POS and alerts. Its stock and history stay, and you can restore it from the Inactive tab.`}
+          confirmLabel="Deactivate"
+          pending={deactivatingPending}
+          error={deactivateError ?? null}
+          onCancel={() => setDeactivating(null)}
+          onConfirm={() => void deactivate()}
+        />
+      )}
+
+      {/* Restore: no confirmation beyond this — it cannot lose data. */}
+      {restoring && (
+        <ConfirmDialog
+          title="Restore product"
+          description={`${restoring.name} (${restoring.sku}) will return to the catalogue.`}
+          confirmLabel="Restore"
+          pending={restoringPending}
+          error={restoreError ?? null}
+          onCancel={() => setRestoring(null)}
+          onConfirm={() => void restore()}
+        />
+      )}
     </>
+  );
+}
+
+/* --------------------------------------------------------------- hard delete */
+
+/**
+ * Delete a product permanently.
+ *
+ * Lives only in the Inactive tab, so the destructive action cannot be triggered
+ * from the row you are working in. It still requires typing the SKU: a permanent
+ * delete with no friction is one mis-click away from gone, and the server will
+ * refuse it for any product with sales history — but "sell one of these first,
+ * then a mis-click" is exactly the sequence to design against.
+ */
+function PurgeButton({ product, onPurged }: { product: ProductDto; onPurged: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState('');
+  const [purged, setPurged] = useState(false);
+
+  const { submit, pending, error } = useSubmit(async () => {
+    await api.delete(`/api/products/${product.id}?purge=true`);
+    setPurged(true);
+    onPurged();
+  });
+
+  const matches = typed.trim().toUpperCase() === product.sku.toUpperCase();
+
+  if (!open) {
+    return (
+      <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
+        Delete
+      </Button>
+    );
+  }
+
+  if (purged) {
+    return <span className="text-xs text-ink-500">Deleted</span>;
+  }
+
+  return (
+    <Dialog title={`Permanently delete ${product.name}?`} onClose={() => setOpen(false)}>
+      <div className="space-y-4">
+        <p className="text-sm text-ink-700">
+          This removes the product, its batches and its stock history for good. It cannot be
+          undone. If the product has ever been sold it will be refused instead — deactivate it
+          in that case, so the sales history stays intact.
+        </p>
+
+        <Input
+          label={`Type ${product.sku} to confirm`}
+          name="confirm-sku"
+          value={typed}
+          onChange={(event) => setTyped(event.target.value)}
+          autoComplete="off"
+        />
+
+        {error && <ErrorBanner message={error} />}
+
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="danger"
+            loading={pending}
+            disabled={!matches}
+            onClick={() => void submit()}
+          >
+            {pending ? 'Deleting…' : 'Delete permanently'}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+/** Shared yes/no dialog for the reversible product actions. */
+function ConfirmDialog({
+  title,
+  description,
+  confirmLabel,
+  pending,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  pending: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Dialog title={title} onClose={onCancel}>
+      <div className="space-y-4">
+        <p className="text-sm text-ink-700">{description}</p>
+
+        {error && <ErrorBanner message={error} />}
+
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button type="button" variant="danger" loading={pending} onClick={onConfirm}>
+            {pending ? 'Working…' : confirmLabel}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
   );
 }
 

@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
 
-import { handleRoute, ok } from '@/lib/api';
+import { protectedRoute, ok } from '@/lib/api';
 import { connectToDatabase } from '@/lib/db';
 import { toStockMovementDto } from '@/lib/serializers';
 import { StockMovement } from '@/models/StockMovement';
@@ -12,7 +12,7 @@ import type { LeanStockMovement } from '@/types/dto';
  * Filterable by product and movement type, newest first, with product names
  * resolved so the table does not need a second lookup per row.
  */
-export const GET = handleRoute(async (request: Request) => {
+export const GET = protectedRoute(async (request: Request) => {
   await connectToDatabase();
 
   const url = new URL(request.url);

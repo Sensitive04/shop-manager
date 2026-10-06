@@ -1,4 +1,4 @@
-import { handleRoute, ok, readJson } from '@/lib/api';
+import { protectedRoute, ok, readJson } from '@/lib/api';
 import { connectToDatabase } from '@/lib/db';
 import { toCustomerDto } from '@/lib/serializers';
 import { Customer } from '@/models/Customer';
@@ -11,7 +11,7 @@ import type { LeanCustomer } from '@/types/dto';
  * GET  /api/customers — searchable customer list.
  * POST /api/customers — add a customer profile.
  */
-export const GET = handleRoute(async (request: Request) => {
+export const GET = protectedRoute(async (request: Request) => {
   await connectToDatabase();
 
   const url = new URL(request.url);
@@ -49,7 +49,7 @@ export const GET = handleRoute(async (request: Request) => {
   });
 });
 
-export const POST = handleRoute(async (request: Request) => {
+export const POST = protectedRoute(async (request: Request) => {
   const input = createCustomerSchema.parse(await readJson(request));
   const created = await createCustomer(input);
   return ok(toCustomerDto(created.toObject() as LeanCustomer), { status: 201 });

@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
 
-import { handleRoute, ok, readJson } from '@/lib/api';
+import { protectedRoute, ok, readJson } from '@/lib/api';
 import { connectToDatabase } from '@/lib/db';
 import { NotFoundError } from '@/lib/errors';
 import { toCustomerDto } from '@/lib/serializers';
@@ -13,7 +13,7 @@ import type { LeanCustomer } from '@/types/dto';
  * GET   /api/customers/:id — profile with recommended products and spend stats.
  * PATCH /api/customers/:id — update the profile.
  */
-export const GET = handleRoute(
+export const GET = protectedRoute(
   async (_request: Request, context: { params: Promise<{ id: string }> }) => {
     await connectToDatabase();
     const { id } = await context.params;
@@ -41,7 +41,7 @@ export const GET = handleRoute(
   },
 );
 
-export const PATCH = handleRoute(
+export const PATCH = protectedRoute(
   async (request: Request, context: { params: Promise<{ id: string }> }) => {
     const { id } = await context.params;
     const input = updateCustomerSchema.parse(await readJson(request));

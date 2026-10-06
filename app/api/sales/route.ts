@@ -1,4 +1,4 @@
-import { handleRoute, ok, readJson } from '@/lib/api';
+import { protectedRoute, ok, readJson } from '@/lib/api';
 import { checkout } from '@/lib/services/sales';
 import { checkoutSchema } from '@/lib/validators';
 
@@ -12,7 +12,7 @@ import { checkoutSchema } from '@/lib/validators';
  * Returns 409 INSUFFICIENT_STOCK with per-line detail when the cart cannot be
  * fulfilled, so the UI can highlight the offending products.
  */
-export const POST = handleRoute(async (request: Request) => {
+export const POST = protectedRoute(async (request: Request) => {
   const input = checkoutSchema.parse(await readJson(request));
 
   const result = await checkout({

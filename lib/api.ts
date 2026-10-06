@@ -3,6 +3,7 @@ import 'server-only';
 import { NextResponse } from 'next/server';
 import { ZodError } from 'zod';
 
+import { requireSession } from '@/lib/auth';
 import { ApiError, isApiError } from '@/lib/errors';
 import type { ApiFailure, ApiResponse } from '@/types/api';
 
@@ -90,6 +91,31 @@ function isDuplicateKeyError(error: unknown): boolean {
     candidate.code === 11000 ||
     (typeof candidate.message === 'string' && candidate.message.includes('E11000'))
   );
+}
+
+/**
+ * `handleRoute` plus a session requirement.
+ *
+ * Every route that touches shop data should use this rather than `handleRoute`,
+ * so that forgetting a guard is a type error instead of a silent exposure. It
+ * exists as a separate function rather than a flag on `handleRoute` because
+ * `/api/health` must stay reachable without credentials — Docker's
+ * `depends_on: service_healthy` check and any uptime monitor would otherwise
+ * start reporting a false outage every time a session expired.
+ *
+ * Auth runs *before* the handler body, so an unauthenticated request cannot
+ * reach a query or provoke a duplicate-key error that leaks whether a record
+ * exists.
+ */
+export function protectedRoute<TArgs extends unknown[]>(
+  handler: (...args: TArgs) => Promise<NextResponse>,
+): (...args: TArgs) => Promise<NextResponse> {
+  const guarded = handleRoute(async (...args: TArgs) => {
+    await requireSession();
+    return handler(...args);
+  });
+
+  return guarded;
 }
 
 /** Read and JSON-parse a request body, converting malformed JSON to a 400. */

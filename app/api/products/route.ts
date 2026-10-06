@@ -1,4 +1,4 @@
-import { handleRoute, ok, readJson } from '@/lib/api';
+import { protectedRoute, ok, readJson } from '@/lib/api';
 import { listProducts, createProduct } from '@/lib/services/products';
 import { createProductSchema, productQuerySchema } from '@/lib/validators';
 
@@ -8,7 +8,7 @@ import { createProductSchema, productQuerySchema } from '@/lib/validators';
  *
  * POST /api/products — create a product, optionally with opening stock.
  */
-export const GET = handleRoute(async (request: Request) => {
+export const GET = protectedRoute(async (request: Request) => {
   const url = new URL(request.url);
   const query = productQuerySchema.parse(Object.fromEntries(url.searchParams));
 
@@ -23,7 +23,7 @@ export const GET = handleRoute(async (request: Request) => {
   });
 });
 
-export const POST = handleRoute(async (request: Request) => {
+export const POST = protectedRoute(async (request: Request) => {
   const body = await readJson(request);
   const input = createProductSchema.parse(body);
   const product = await createProduct(input);

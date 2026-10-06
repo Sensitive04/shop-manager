@@ -1,4 +1,4 @@
-import { handleRoute, ok, readJson } from '@/lib/api';
+import { protectedRoute, ok, readJson } from '@/lib/api';
 import { ApiError } from '@/lib/errors';
 import { toCustomerDto } from '@/lib/serializers';
 import { setRecommendations } from '@/lib/services/customers';
@@ -9,7 +9,7 @@ import type { LeanCustomer } from '@/types/dto';
  *
  * Body: `{ productIds: string[] }`
  */
-export const POST = handleRoute(
+export const POST = protectedRoute(
   async (request: Request, context: { params: Promise<{ id: string }> }) => {
     const { id } = await context.params;
     const body = (await readJson(request)) as { productIds?: unknown };

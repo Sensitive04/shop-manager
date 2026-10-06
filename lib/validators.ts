@@ -94,6 +94,37 @@ export const skinType = z.enum(SKIN_TYPES, { error: 'Choose a skin type' });
 
 export { nonNegativeMoney, positiveMoney, trimmedString, wholeNumber };
 
+/* ---------------------------------------------------------------------- auth */
+
+export const loginSchema = z.object({
+  username: z
+    .string({ error: 'Enter your username' })
+    .trim()
+    .min(1, { error: 'Enter your username' })
+    .max(40, { error: 'Username is too long' }),
+  // No length cap on the password field: an attacker must not be able to probe
+  // for a server-side maximum, and no real password approaches any sane limit.
+  // The 8-character floor is a user-error guard, not a security control.
+  password: z
+    .string({ error: 'Enter your password' })
+    .min(1, { error: 'Enter your password' })
+    .max(200, { error: 'Password is too long' }),
+});
+
+/** Credentials for the one owner account, created by the seed script. */
+export const ownerCredentialsSchema = z.object({
+  username: z
+    .string({ error: 'ADMIN_USERNAME is required' })
+    .trim()
+    .min(3, { error: 'ADMIN_USERNAME must be at least 3 characters' })
+    .max(40, { error: 'ADMIN_USERNAME must be 40 characters or fewer' }),
+  password: z
+    .string({ error: 'ADMIN_PASSWORD is required' })
+    .min(8, { error: 'ADMIN_PASSWORD must be at least 8 characters' })
+    .max(200, { error: 'ADMIN_PASSWORD must be 200 characters or fewer' }),
+  displayName: trimmedString(80).optional(),
+});
+
 /* ------------------------------------------------------------------ products */
 
 const batchInput = z.object({

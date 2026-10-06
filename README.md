@@ -17,6 +17,7 @@ customer buys so you can recommend the right product next time.
 - [Commands](#commands)
 - [How the data model works](#how-the-data-model-works)
 - [API](#api)
+- [Authentication](#authentication)
 - [Testing](#testing)
 - [Project layout](#project-layout)
 - [Deployment notes](#deployment-notes)
@@ -102,10 +103,22 @@ nothing needs to be installed:
 
 ```bash
 npm install
+```
+
+Create the owner account (skipped entirely if `ADMIN_USERNAME`/`ADMIN_PASSWORD`
+are unset), then start the server:
+
+```bash
+$env:ADMIN_USERNAME="owner"
+$env:ADMIN_PASSWORD="<something long and random>"
+npm run seed
 npm run dev
 ```
 
-Data lives in memory and is discarded when the server stops.
+Open <http://localhost:3000> — you will be redirected to `/login`.
+
+Data lives in memory and is discarded when the server stops, including the owner
+account. Any option below persists it.
 
 ### Option C — Local Node, your own MongoDB
 
@@ -123,9 +136,19 @@ All variables are optional in development; see `.env.example`.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `MONGODB_URI` | *(empty)* | Connection string. Must point at a replica set. Empty triggers the in-memory fallback. |
-| `MONGODB_MEMORY_FALLBACK` | `true` | Set `false` to fail loudly instead of starting the in-memory server. Forced off when `NODE_ENV=production`. |
+| `MONGODB_DB_NAME` | `shopmanager` | Database name, for URIs that name none. |
+| `MONGODB_MEMORY_FALLBACK` | `true` | Set `false` in any deployed environment to fail loudly instead of starting the in-memory server. |
+| `ADMIN_USERNAME` | *(empty)* | Owner account username, read by `npm run seed`. Required for the seed. |
+| `ADMIN_PASSWORD` | *(empty)* | Owner account password, read by `npm run seed`. Required for the seed, minimum 8 characters. |
+| `ADMIN_DISPLAY_NAME` | *(username)* | Name shown in the nav bar. |
 | `EXPIRY_ALERT_DAYS` | `30` | Default window for the "expiring soon" queue. |
 | `CURRENCY_SYMBOL` | `$` | Currency label shown throughout the UI. |
+
+`MONGODB_MEMORY_FALLBACK=false` is the production guard, and it deliberately does
+**not** key off `NODE_ENV`: declaring `NODE_ENV` in Netlify applies it to the
+install step, where npm skips every devDependency and the build fails. Next.js
+sets `NODE_ENV=production` itself during `next build`, so the variable achieves
+nothing except the breakage.
 
 `.env`, `.env*.local` are git-ignored. Never commit a real connection string —
 it contains a password.
@@ -146,7 +169,13 @@ it contains a password.
 | `npm run seed` | **Destructive.** Wipe and rebuild the database with demo data. |
 
 `npm run seed` wipes the collections it manages, so point it at a throwaway
-database. It requires a replica set, exactly like the app.
+database. It requires a replica set, exactly like the app, and `ADMIN_USERNAME`
+plus `ADMIN_PASSWORD` — it validates them and **aborts before deleting anything**
+if either is missing, so there is no path that creates an account with a blank
+password.
+
+The owner account is never wiped. Re-running the seed leaves an existing account
+and its password untouched; it only creates one that does not exist yet.
 
 > On a memory-constrained machine, raise the heap for typechecking and builds:
 > `$env:NODE_OPTIONS="--max-old-space-size=3300"` (PowerShell) or
@@ -199,7 +228,37 @@ renders — it is just quietly missing a day.
 entry as part of checkout, so the till and the ledger cannot drift. The
 `FinancialTransaction` schema enforces that `Sales` can only be income and that
 operating costs can only be outcomes; a fully discounted sale may legitimately be
-zero, but a manual entry may not be.
+zero, but a manual entry may not.
+
+**Removing a product has two distinct operations.** Deactivating sets
+`active: false`, which hides it from the catalogue, the POS and the alert queues
+while keeping the document — necessary for anything with sales history, since a
+sale must keep pointing at a real product. A hard delete is available for a row
+that was only ever created, and is refused with 409 if any sale references it. It
+also removes the stock movements it created and unlinks it from customer
+recommendations, all in one transaction. The reason the second operation exists at
+all: `sku` carries a unique index, so a deactivated product keeps its SKU reserved
+and cannot be recreated under the same one.
+
+### How much space does this take?
+
+Measured with `BSON.calculateObjectSize` against representative documents:
+
+| Document | Size |
+| --- | --- |
+| Manual ledger entry (no breakdown) | 194 B |
+| POS ledger entry (5-item breakdown) | 771 B |
+| Sale (5 items, with FEFO batch detail) | 1,535 B |
+| Stock movement (one consumed lot) | 288 B |
+
+One five-item checkout therefore costs about 3.7 KB across the three collections.
+Projected over a year: **8 MB at 30 sales/day, 16 MB at 60/day, 54 MB at
+200/day.** MongoDB Atlas free tier allows 0.5 GB, so even the busiest of those
+uses roughly a tenth of the allowance; filling it would take on the order of
+10,000 sales a day.
+
+Capacity is not the risk on the free tier — **backups are.** M0 does not include
+them, so schedule your own `mongodump` if the books matter.
 
 ---
 
@@ -215,9 +274,11 @@ Every response uses one envelope, so the client can branch on a single field:
 | Code | HTTP | Meaning |
 | --- | --- | --- |
 | `BAD_REQUEST` | 400 | Malformed request. |
+| `UNAUTHORIZED` | 401 | No valid session. Sent by every route except `/api/health`. |
+| `FORBIDDEN` | 403 | Authenticated, but not permitted. |
 | `VALIDATION_ERROR` | 422 | Input failed validation; `issues` lists each field. |
 | `NOT_FOUND` | 404 | No such record. |
-| `CONFLICT` | 409 | Duplicate SKU or similar. |
+| `CONFLICT` | 409 | Duplicate SKU, or a permanent delete refused because the product has sales. |
 | `INSUFFICIENT_STOCK` | 409 | Cart cannot be fulfilled; `issues` names the offending lines. |
 | `DATABASE_ERROR` | 503 | MongoDB unreachable. |
 | `INTERNAL_ERROR` | 500 | Unexpected bug. Details are logged, never returned. |
@@ -226,10 +287,13 @@ Every response uses one envelope, so the client can branch on a single field:
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `GET` | `/api/health` | Liveness plus whether the connection supports transactions. |
+| `GET` | `/api/health` | Liveness plus whether the connection supports transactions. **Unauthenticated** — the Docker healthcheck has no credentials. |
+| `POST` | `/api/auth` | Sign in. Sets the session cookie. |
+| `DELETE` | `/api/auth` | Sign out. Revokes the session server-side and clears the cookie. |
+| `GET` | `/api/auth/me` | Current user. 401 when signed out. |
 | `GET` | `/api/dashboard` | Everything the dashboard shows. |
-| `GET` `POST` | `/api/products` | List (search, category, low-stock, `expiringWithinDays`, paging) / create. |
-| `GET` `PATCH` `DELETE` | `/api/products/[id]` | Read, update, deactivate. |
+| `GET` `POST` | `/api/products` | List (search, category, low-stock, `expiringWithinDays`, `includeInactive`, paging) / create. |
+| `GET` `PATCH` `DELETE` | `/api/products/[id]` | Read, update, deactivate. `?restore=true` reactivates; `?purge=true` deletes permanently (see below). |
 | `POST` | `/api/products/[id]/batches` | Stock-in; can merge into an existing lot. |
 | `POST` | `/api/products/[id]/stock-out` | Manual stock-out, FEFO unless a `batchId` is given. |
 | `PATCH` | `/api/products/[id]/stock-out` | Signed correction (stocktake, damage). |
@@ -248,9 +312,39 @@ Stock movements and product updates return the updated product, so the UI can
 refresh from a single response. All list endpoints page with `?page=&limit=` and
 report `total` and `totalPages`; every filter is optional.
 
-> **This build has no authentication.** Anyone who can reach the app can change
-> the books. That is deliberate for a single-user shop on a trusted network, but
-> it must not be exposed to the public internet as-is. See below.
+Every endpoint above except `/api/health` requires a session. See
+[Authentication](#authentication).
+
+---
+
+## Authentication
+
+One shop, one user. Create the account with `npm run seed` (see
+[Commands](#commands)), then sign in at `/login`.
+
+**Sessions are server-side and revocable.** A random 32-byte token goes into an
+`HttpOnly` cookie; only its scrypt hash is stored, on `user.sessionTokens`.
+Signing out deletes the stored hash, so the cookie is dead immediately rather
+than remaining valid until it expires. This is why the design is not a JWT — a
+signed self-contained token cannot be withdrawn.
+
+**Passwords are scrypt-hashed**, using `node:crypto` rather than a dependency, so
+nothing native has to build on Netlify. The cost parameters are embedded in the
+hash, so the work factor can be raised later without a migration.
+
+Enforcement is in two independent layers:
+
+- `protectedRoute` in `lib/api.ts` rejects an unauthenticated request with 401
+  before the handler body runs. Fifteen routes use it; `/api/health` and the
+  three `/api/auth` routes deliberately do not.
+- The `(app)` layout calls `requireSession` and redirects to `/login`, so a
+  signed-out visitor never sees a page shell.
+
+Neither layer trusts the other, and the client-side 401 handler in
+`api-client.ts` is only a convenience.
+
+`MONGODB_URI` and `ADMIN_PASSWORD` are secrets. Do not commit either, and do not
+paste either into chat or an issue.
 
 ---
 
@@ -277,6 +371,14 @@ The suite covers the parts where a subtle mistake is expensive:
 - **`ledger`** — integration tests for period filtering and ledger integrity,
   including that an entry recorded late on the final day of a range is not
   dropped.
+- **`auth`** — password hashing (salting, cost rejection, malformed input) and
+  session issuance against a real replica set, including that an unknown username
+  and a wrong password produce identical errors and that `ensureUser` never
+  overwrites an existing password.
+- **`product-removal`** — the soft/hard delete split: that deactivation keeps the
+  document while purge removes it, that purge clears the stock movements and
+  recommendation links it would otherwise orphan, that a sold product is refused
+  with 409, and that purge frees the unique SKU where deactivate cannot.
 
 Tests spin up their own MongoDB replica set; no external database is needed.
 
@@ -299,14 +401,17 @@ TZ=UTC npm test
 
 ```
 app/
-  (app)/              authenticated-area pages (dashboard, inventory, pos, ledger, customers)
+  (app)/              session-guarded pages (dashboard, inventory, pos, ledger, customers)
+  login/              the only page reachable without a session
   api/                route handlers, one folder per resource
   error.tsx           route-level error boundary
   loading.tsx         route-level loading UI
   not-found.tsx       404
 components/           UI primitives, app shell, API client hooks
 lib/
-  api.ts              envelope helpers and route wrapper
+  api.ts              envelope helpers, handleRoute and protectedRoute
+  auth.ts             sessions: login, logout, requireSession, cookie policy
+  password.ts         scrypt hashing (no next/headers dependency, so scripts can use it)
   db.ts               mongoose connection, transaction helper, memory fallback
   errors.ts           typed errors -> HTTP status codes
   fefo.ts             batch allocation
@@ -316,7 +421,7 @@ lib/
   serializers.ts      mongoose documents -> plain DTOs
   services/           all business logic, transport-agnostic
 models/               mongoose schemas
-scripts/seed.ts       deterministic demo data
+scripts/seed.ts       deterministic demo data + owner account
 tests/                vitest suites
 types/                shared enums and DTO types
 ```
@@ -335,17 +440,24 @@ without going through HTTP.
 
 **Before putting this on a network other than your own:**
 
-1. **Add authentication.** This is the important one — there is none. Put it
-   behind a reverse proxy with basic auth or a VPN, or add a real auth layer.
-2. **Back up MongoDB.** The database holds the only copy of the stock and the
-   books. `mongodump` on a schedule.
-3. **Consider transactions on the real deployment.** The app reports
+1. **Back up MongoDB.** The database holds the only copy of the stock and the
+   books, and Atlas free tier does not back it up. `mongodump` on a schedule.
+2. **Check transactions on the real deployment.** The app reports
    `transactional: false` from `/api/health` if it cannot find a replica set;
    checkout still works but falls back to sequential writes, which is no longer
    atomic. Treat a `false` there as an error in production.
-4. **Rotate the credentials** in `docker-compose.yml` before using it anywhere
+3. **Rotate the credentials** in `docker-compose.yml` before using it anywhere
    shared.
-5. **Serve over HTTPS**, and keep `.env` files out of the image.
+4. **Serve over HTTPS**, and keep `.env` files out of the image.
+
+Authentication is already built in (see [Authentication](#authentication)), so
+item 1 in the old list no longer applies. Two Netlify-specific notes:
+
+- `ADMIN_USERNAME`/`ADMIN_PASSWORD` are needed only to run the seed once. Set
+  them, seed, then **delete them** from the environment. Nothing re-reads them on
+  redeploy.
+- Do not use Netlify's site-wide password protection. It would also cover
+  `/login`, so there would be no way in.
 
 `npm audit` reports high-severity advisories in the transitive dependency tree.
 The available automated fix downgrades `eslint-config-next` (a dev dependency),

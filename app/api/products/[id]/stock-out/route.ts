@@ -1,4 +1,4 @@
-import { handleRoute, ok, readJson } from '@/lib/api';
+import { protectedRoute, ok, readJson } from '@/lib/api';
 import { adjustStock, stockOut } from '@/lib/services/inventory';
 import { getProduct } from '@/lib/services/products';
 import { adjustStockSchema, stockOutSchema } from '@/lib/validators';
@@ -9,7 +9,7 @@ import { adjustStockSchema, stockOutSchema } from '@/lib/validators';
  * PATCH /api/products/:id/stock-out — signed correction, e.g. after a stocktake
  * or a damaged unit.
  */
-export const POST = handleRoute(
+export const POST = protectedRoute(
   async (request: Request, context: { params: Promise<{ id: string }> }) => {
     const { id } = await context.params;
     const input = stockOutSchema.parse(await readJson(request));
@@ -25,7 +25,7 @@ export const POST = handleRoute(
   },
 );
 
-export const PATCH = handleRoute(
+export const PATCH = protectedRoute(
   async (request: Request, context: { params: Promise<{ id: string }> }) => {
     const { id } = await context.params;
     const input = adjustStockSchema.parse(await readJson(request));

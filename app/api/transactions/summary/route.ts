@@ -1,4 +1,4 @@
-import { handleRoute, ok } from '@/lib/api';
+import { protectedRoute, ok } from '@/lib/api';
 import { summarize } from '@/lib/services/ledger';
 import { transactionQuerySchema } from '@/lib/validators';
 
@@ -8,7 +8,7 @@ import { transactionQuerySchema } from '@/lib/validators';
  * Income, outcome, net and the category / payment-method breakdowns for a
  * period. Used by the ledger header and the dashboard.
  */
-export const GET = handleRoute(async (request: Request) => {
+export const GET = protectedRoute(async (request: Request) => {
   const url = new URL(request.url);
   const query = transactionQuerySchema.parse(Object.fromEntries(url.searchParams));
 

@@ -1,4 +1,4 @@
-import { handleRoute, ok } from '@/lib/api';
+import { protectedRoute, ok } from '@/lib/api';
 import { toSaleDto } from '@/lib/serializers';
 import { customerHistory } from '@/lib/services/customers';
 import type { LeanSale } from '@/types/dto';
@@ -7,7 +7,7 @@ import type { LeanSale } from '@/types/dto';
  * GET /api/customers/:id/history — the customer's purchase history, newest
  * first, so the assistant can see what they already own before recommending.
  */
-export const GET = handleRoute(
+export const GET = protectedRoute(
   async (request: Request, context: { params: Promise<{ id: string }> }) => {
     const { id } = await context.params;
 

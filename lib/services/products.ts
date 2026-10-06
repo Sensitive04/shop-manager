@@ -2,11 +2,14 @@ import 'server-only';
 
 import { Types, type QueryFilter } from 'mongoose';
 
-import { connectToDatabase } from '@/lib/db';
-import { NotFoundError } from '@/lib/errors';
+import { connectToDatabase, withTransaction } from '@/lib/db';
+import { ConflictError, NotFoundError } from '@/lib/errors';
 import { expiryCutoff } from '@/lib/dates';
 import { toProductDto } from '@/lib/serializers';
+import { Customer } from '@/models/Customer';
 import { Product, type ProductShape } from '@/models/Product';
+import { Sale } from '@/models/Sale';
+import { StockMovement } from '@/models/StockMovement';
 import type { CreateProductInput, ProductQuery, UpdateProductInput } from '@/lib/validators';
 import type { LeanProduct, ProductDto } from '@/types/dto';
 
@@ -180,6 +183,10 @@ export async function updateProduct(
  * Soft delete. Sales and stock movements reference this product, so the record
  * is deactivated rather than removed — history stays intact and the product can
  * be restored.
+ *
+ * Note this leaves the SKU reserved by the unique index. That is the reason a
+ * product created purely for testing cannot simply be reused: see
+ * {@link purgeProduct} for the escape hatch.
  */
 export async function deactivateProduct(productId: string): Promise<ProductDto> {
   await connectToDatabase();
@@ -211,6 +218,72 @@ export async function reactivateProduct(productId: string): Promise<ProductDto> 
   if (!product) throw new NotFoundError('Product');
 
   return toProductDto(product);
+}
+
+/**
+ * Hard delete, for a product that was never really sold.
+ *
+ * Soft deletion is the right default, but it is the wrong tool for a row created
+ * while trying something out: the document lingers, and because `sku` carries a
+ * unique index the deactivated record permanently reserves that SKU, so creating a
+ * replacement with the same one fails with a duplicate-key error. This removes it
+ * for real.
+ *
+ * The guard is a sale count, and only a sale count. Sales are the one reference
+ * that cannot be reconstructed — losing them would silently change recorded
+ * revenue and margin — so a product with any sale history is refused and must go
+ * through {@link deactivateProduct} instead.
+ *
+ * Everything else is disposable and cleaned up here rather than left dangling:
+ *
+ *   - `batches` are embedded, so removing the product removes them with it.
+ *   - `StockMovement` rows exist even for a product that was only created, because
+ *     opening stock writes a `stock-in` audit row on create (see `createProduct`).
+ *   - `Customer.recommendedProducts` is an array of ids that would otherwise point
+ *     at nothing.
+ *
+ * All three writes run in one transaction: a purge that deleted the product but
+ * failed to remove its audit rows would leave a stock trail leading nowhere.
+ */
+export async function purgeProduct(productId: string): Promise<{ purged: true }> {
+  await connectToDatabase();
+
+  if (!Types.ObjectId.isValid(productId)) throw new NotFoundError('Product');
+
+  return withTransaction(async (session) => {
+    // `withTransaction` passes `undefined` when the deployment cannot run
+    // transactions. Mongoose wants `null` on query `.session()` but
+    // `undefined` in an options object, so both forms are derived here — matching
+    // how `lib/services/inventory.ts` handles the same optional session.
+    const querySession = session ?? null;
+    const writeOptions = session ? { session } : {};
+
+    // Existence and sale history are checked together, before any write.
+    const product = await Product.findById(productId)
+      .select('sku name')
+      .session(querySession)
+      .lean<{ sku: string; name: string } | null>();
+    if (!product) throw new NotFoundError('Product');
+
+    const saleCount = await Sale.countDocuments({ 'items.product': productId }).session(querySession);
+    if (saleCount > 0) {
+      throw new ConflictError(
+        `${product.name} has been sold ${saleCount} time${saleCount === 1 ? '' : 's'} and cannot be deleted permanently — deactivate it instead to keep the sales history.`,
+      );
+    }
+
+    await Promise.all([
+      Product.deleteOne({ _id: productId }, writeOptions),
+      StockMovement.deleteMany({ product: productId }, writeOptions),
+      Customer.updateMany(
+        { recommendedProducts: productId },
+        { $pull: { recommendedProducts: productId } },
+        writeOptions,
+      ),
+    ]);
+
+    return { purged: true as const };
+  });
 }
 
 /** Products at or below their reorder point. */

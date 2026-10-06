@@ -1,4 +1,4 @@
-import { handleRoute, ok, readJson } from '@/lib/api';
+import { protectedRoute, ok, readJson } from '@/lib/api';
 import { startOfDay } from '@/lib/dates';
 import { recordTransaction, summarize } from '@/lib/services/ledger';
 import { createTransactionSchema, transactionQuerySchema } from '@/lib/validators';
@@ -16,7 +16,7 @@ import type { LeanFinancialTransaction, TransactionDto } from '@/types/dto';
  * POS income is written by /api/sales and appears here automatically; this
  * endpoint is for operating costs such as rent and utilities.
  */
-export const GET = handleRoute(async (request: Request) => {
+export const GET = protectedRoute(async (request: Request) => {
   await connectToDatabase();
 
   const url = new URL(request.url);
@@ -66,7 +66,7 @@ export const GET = handleRoute(async (request: Request) => {
   });
 });
 
-export const POST = handleRoute(async (request: Request) => {
+export const POST = protectedRoute(async (request: Request) => {
   const input = createTransactionSchema.parse(await readJson(request));
   const created = await recordTransaction(input);
   return ok(toTransactionDto(created.toObject()), { status: 201 });

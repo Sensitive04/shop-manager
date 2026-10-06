@@ -8,6 +8,8 @@
 
 export type ApiErrorCode =
   | 'BAD_REQUEST'
+  | 'UNAUTHORIZED'
+  | 'FORBIDDEN'
   | 'VALIDATION_ERROR'
   | 'NOT_FOUND'
   | 'CONFLICT'
@@ -17,6 +19,8 @@ export type ApiErrorCode =
 
 const STATUS_BY_CODE: Record<ApiErrorCode, number> = {
   BAD_REQUEST: 400,
+  UNAUTHORIZED: 401,
+  FORBIDDEN: 403,
   VALIDATION_ERROR: 422,
   NOT_FOUND: 404,
   CONFLICT: 409,
@@ -59,6 +63,28 @@ export class NotFoundError extends ApiError {
   constructor(resource = 'Resource') {
     super('NOT_FOUND', `${resource} not found`);
     this.name = 'NotFoundError';
+  }
+}
+
+/**
+ * No valid session.
+ *
+ * Deliberately vague about *why* — distinguishing "no cookie" from "expired
+ * session" from "wrong password" tells an attacker which half of the guess to
+ * keep working on.
+ */
+export class UnauthorizedError extends ApiError {
+  constructor(message = 'Sign in to continue.') {
+    super('UNAUTHORIZED', message);
+    this.name = 'UnauthorizedError';
+  }
+}
+
+/** Authenticated, but not permitted to perform this action. */
+export class ForbiddenError extends ApiError {
+  constructor(message = 'You do not have permission to do that.') {
+    super('FORBIDDEN', message);
+    this.name = 'ForbiddenError';
   }
 }
 

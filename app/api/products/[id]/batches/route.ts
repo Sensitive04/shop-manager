@@ -1,4 +1,4 @@
-import { handleRoute, ok, readJson } from '@/lib/api';
+import { protectedRoute, ok, readJson } from '@/lib/api';
 import { stockIn } from '@/lib/services/inventory';
 import { getProduct } from '@/lib/services/products';
 import { stockInSchema } from '@/lib/validators';
@@ -9,7 +9,7 @@ import { stockInSchema } from '@/lib/validators';
  * Returns the updated product so the inventory table can refresh in place
  * without a second round trip.
  */
-export const POST = handleRoute(
+export const POST = protectedRoute(
   async (request: Request, context: { params: Promise<{ id: string }> }) => {
     const { id } = await context.params;
     const input = stockInSchema.parse(await readJson(request));

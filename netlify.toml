@@ -59,6 +59,10 @@
 #   MONGODB_MEMORY_FALLBACK   false
 #   TZ                        shop timezone, e.g. Asia/Karachi
 #
+# ADMIN_USERNAME / ADMIN_PASSWORD are needed for exactly one thing: creating the
+# owner account via `npm run seed`. Set them for that run and then delete them —
+# the account persists in Atlas, and nothing on redeploy re-reads them.
+#
 # Do not set NODE_ENV here — see the note in [build.environment] above.
 #
 # TZ matters: lib/dates.ts parses YYYY-MM-DD in local time to keep ledger day
@@ -68,3 +72,8 @@
 # MONGODB_MEMORY_FALLBACK=false matters for a different reason: without it, a
 # deployed function whose MONGODB_URI is missing or wrong attaches to an
 # in-memory database and accepts sales that vanish when the instance thaws.
+#
+# Auth is enforced in code rather than by a proxy, because Netlify's password
+# protection applies to the whole site and would hide /login as well. Every API
+# route except /api/health goes through `protectedRoute` in lib/api.ts, which
+# rejects a request with no valid session before the handler runs.

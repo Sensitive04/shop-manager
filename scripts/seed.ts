@@ -18,6 +18,8 @@
  */
 
 import { connectToDatabase, disconnectFromDatabase } from '@/lib/db';
+import { ensureUser } from '@/lib/auth';
+import { ownerCredentialsSchema } from '@/lib/validators';
 import { checkout } from '@/lib/services/sales';
 import { createProduct } from '@/lib/services/products';
 import { createCustomer } from '@/lib/services/customers';
@@ -189,6 +191,29 @@ const CUSTOMERS: {
 
 async function main() {
   await connectToDatabase();
+
+  // The owner account is created before the wipe so a missing credential fails
+  // fast, before anything has been destroyed. It is *not* in the deleteMany list
+  // below: wiping demo data must never lock the shop out of its own app.
+  const credentials = ownerCredentialsSchema.safeParse({
+    username: process.env.ADMIN_USERNAME,
+    password: process.env.ADMIN_PASSWORD,
+    displayName: process.env.ADMIN_DISPLAY_NAME ?? 'Shop owner',
+  });
+
+  if (!credentials.success) {
+    console.error('[seed] ADMIN_USERNAME and ADMIN_PASSWORD are required to create the owner account.');
+    console.error(`[seed] ${credentials.error.issues.map((issue) => issue.message).join('; ')}`);
+    console.error('[seed] aborting before any data was deleted.');
+    process.exit(1);
+  }
+
+  const account = await ensureUser(credentials.data);
+  console.info(
+    account.created
+      ? `[seed] created owner account "${credentials.data.username.toLowerCase()}"`
+      : `[seed] owner account "${credentials.data.username.toLowerCase()}" already exists — password unchanged`,
+  );
 
   console.info('[seed] clearing existing collections…');
   // deleteMany rather than drop, so declared indexes survive.
@@ -375,7 +400,7 @@ async function main() {
   console.info(`  stock movements ${movementCount}`);
   console.info(`  low stock       ${lowStock.length} (${lowStock.map((p) => p.sku).join(', ') || 'none'})`);
   console.info('');
-  console.info('[seed] run `npm run dev` and open http://localhost:3000');
+  console.info(`[seed] sign in at http://localhost:3000/login as "${credentials.data.username.toLowerCase()}"`);
 }
 
 main()
