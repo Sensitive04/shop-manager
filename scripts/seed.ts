@@ -6,6 +6,16 @@
  * at different expiry dates and costs, customers, a week of POS sales and the
  * operating expenses that go with them.
  *
+ * Pass `--owner-only` to create just the sign-in account and touch no data —
+ * useful on a fresh database (or after one was wiped) when the shop needs its
+ * login restored without any sample stock:
+ *
+ *   npm run seed -- --owner-only
+ *
+ * The owner account is always created first, so a missing credential aborts
+ * before anything is destroyed, and the account itself is deliberately not in
+ * the deleteMany list: wiping demo data must never lock the shop out.
+ *
  * Sales go through the real `checkout` service rather than being inserted
  * directly, so the seeded state is produced by exactly the code path the app
  * runs — FEFO allocation, the stock audit trail and the ledger link are all
@@ -214,6 +224,14 @@ async function main() {
       ? `[seed] created owner account "${credentials.data.username.toLowerCase()}"`
       : `[seed] owner account "${credentials.data.username.toLowerCase()}" already exists — password unchanged`,
   );
+
+  if (process.argv.includes('--owner-only')) {
+    console.info(
+      `[seed] --owner-only: skipping demo data; no collections were touched. ` +
+        `Sign in as "${credentials.data.username.toLowerCase()}".`,
+    );
+    return;
+  }
 
   console.info('[seed] clearing existing collections…');
   // deleteMany rather than drop, so declared indexes survive.

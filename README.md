@@ -167,12 +167,15 @@ it contains a password.
 | `npm test` | Run the test suite once. |
 | `npm run test:watch` | Tests in watch mode. |
 | `npm run seed` | **Destructive.** Wipe and rebuild the database with demo data. |
+| `npm run seed -- --owner-only` | Create the sign-in account only; touch no data. |
 
 `npm run seed` wipes the collections it manages, so point it at a throwaway
 database. It requires a replica set, exactly like the app, and `ADMIN_USERNAME`
 plus `ADMIN_PASSWORD` — it validates them and **aborts before deleting anything**
 if either is missing, so there is no path that creates an account with a blank
-password.
+password. With `--owner-only` it skips the wipe entirely and only ensures the
+account exists — the non-destructive way to restore a login on a fresh or wiped
+database.
 
 The owner account is never wiped. Re-running the seed leaves an existing account
 and its password untouched; it only creates one that does not exist yet.
