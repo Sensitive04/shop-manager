@@ -11,6 +11,7 @@ export const PRODUCT_CATEGORIES = [
   'Sunscreen',
   'Moisturizer',
   'Toner',
+  'Other',
 ] as const;
 export type ProductCategory = (typeof PRODUCT_CATEGORIES)[number];
 
